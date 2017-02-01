@@ -14,6 +14,7 @@ var (
 	ErrLowerTerm = errors.New("lower term")
 	ErrVoteConditionsFail = errors.New("cannot grant vote")
 	ErrTermNotMatch = errors.New("terms do not match at the provided index")
+	ErrNotLeader = errors.New("not the leader")
 )
 
 const (
@@ -49,6 +50,7 @@ func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 		nextIdx: map[uint64]uint64{},
 		matchIdx: map[uint64]uint64{},
 		lastSentIdx: map[uint64]uint64{},
+		addEntries: make(chan *addEntryFuture, 10),
 	}
 	r.configure()
 	return r
@@ -83,6 +85,33 @@ type Raft struct {
 	sendVoteReq chan *rs.SendVoteRequest
 	voteReq chan *rs.VoteRequestFuture
 	voteRes chan *rpb.Response
+
+	addEntries chan *addEntryFuture
+}
+
+type addEntryFuture struct {
+	command []byte
+	response chan *addEntryResponse
+}
+
+type addEntryResponse struct {
+	idx uint64
+	err error
+}
+
+func (r *Raft) AddEntry(cmd []byte) error {
+	c := make(chan *addEntryResponse, 2)
+	r.addEntries <- &addEntryFuture{cmd, c}
+	res := <- c
+
+	if res.err != nil {
+		log.Printf("[WARN] raft: add entry fail %v", res.err)
+		return res.err
+	}
+
+	log.Printf("[DEBU] raft: added entry, idx: %d", res.idx)
+	// todo: wait for commit index
+	return nil
 }
 
 func (r *Raft) configure() {
@@ -181,6 +210,8 @@ func (r *Raft) runAsFollower() {
 	r.votedFor = 0
 	r.voteCount = 0
 	select {
+	case req := <-r.addEntries:
+		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
 		r.respondToAppendEntriesAsFollower(msg)
 	case msg := <-r.voteReq:
@@ -291,8 +322,29 @@ func (r *Raft) checkCommitIdx() {
 	r.commitIdx = n
 }
 
+func (r *Raft) applyLogEntry(req *addEntryFuture) {
+	nextIdx := r.lastAppliedIdx + 1
+	e := &rpb.Entry{
+		Command: req.command,
+		Term: r.currentTerm,
+		Idx: nextIdx,
+	}
+
+	_, err := r.logStore.Add(e)
+	if err != nil {
+		log.Printf("[ERRO] raft: error applying entry to store: %v", err)
+		req.response <- &addEntryResponse{0, err}
+		return
+	}
+
+	r.lastAppliedIdx = nextIdx
+	req.response <- &addEntryResponse{nextIdx, err}
+}
+
 func (r *Raft) runAsLeader() {
 	select {
+	case req := <-r.addEntries:
+		r.applyLogEntry(req)
 	case msg := <-r.appendEntriesReq:
 		if msg.Msg.Term >= r.currentTerm {
 			log.Printf("[DEBU] raft: leader received append entries from greater term %+v", msg.Msg)
@@ -348,6 +400,8 @@ func (r *Raft) handleVoteResponse(msg *rpb.Response) {
 
 func (r *Raft) runAsCandidate() {
 	select {
+	case req := <-r.addEntries:
+		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
 		r.currentTerm = msg.Msg.Term // todo: need to check term greater than here?
 		r.state = Follower

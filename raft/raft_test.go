@@ -217,3 +217,12 @@ func TestRaft_Election(t *testing.T) {
 
 	assert.Equal(t, Leader, testRaft.state)
 }
+
+func TestRaft_ApplyEntry(t *testing.T) {
+	setupTestRaft()
+
+	c := make(chan *addEntryResponse, 2)
+	testRaft.addEntries <- &addEntryFuture{cmd, c}
+	res := <- c
+
+}
