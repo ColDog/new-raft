@@ -90,6 +90,7 @@ func (s *RaftGRPCService) Start() error {
 
 	s.catchInterrupt()
 	go s.run()
+	go s.runGossip()
 	go s.runJoinOnBoot()
 
 	log.Println("[INFO] service: serving on", s.listen, "with id", s.ID)
@@ -286,9 +287,21 @@ func (s *RaftGRPCService) pingClusterState(node *RaftGRPCNode) error {
 
 func (s *RaftGRPCService) runGossip() {
 	for {
-		err := s.send(s.randNodeID(), s.pingClusterState)
-		if err != nil {
-			log.Printf("[ERRO] service: could not ping state: %v", err)
+		done := make(chan bool)
+		go func() {
+			err := s.send(s.randNodeID(), s.pingClusterState)
+			if err != nil && err != ErrNoNode {
+				log.Printf("[ERRO] service: could not ping state: %v", err)
+			}
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			break
+		case <-time.After(5 * time.Second):
+			log.Printf("[WARN] service: took more than 5 seconds to try to send a ping, potential deadlock!")
+			break
 		}
 		time.Sleep(GossipPingInterval)
 	}
@@ -351,11 +364,12 @@ func (s *RaftGRPCService) removeNode(id uint64) {
 	if id == s.ID { return }
 
 	s.lock.RLock()
-	_, ok := s.Nodes[id]
+	node, ok := s.Nodes[id]
 	s.lock.RUnlock()
 
 	if ok {
 		s.lock.Lock()
+		node.conn.Close()
 		delete(s.Nodes, id)
 		s.lock.Unlock()
 	}
@@ -421,7 +435,8 @@ func (s *RaftGRPCService) send(id uint64, callback sendMsgFunc) error {
 		}
 	}
 
-	return callback(node)
+	go callback(node)
+	return nil
 }
 
 func (s *RaftGRPCService) nodeList() []*rpb.Node {
@@ -444,7 +459,7 @@ func (s *RaftGRPCService) catchInterrupt() {
 		<-c
 		go func() {
 			time.Sleep(10 * time.Second)
-			os.Exit(1)
+			log.Fatal("exiting forcefully after failed to leave cluster")
 		}()
 
 		s.LeaveCluster()

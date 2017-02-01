@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	listenF = flag.String("listen", ":3002", "Address to listen on")
-	advertiseF = flag.String("advertise", "127.0.0.1:3002", "Address of this node")
+	listenF = flag.String("listen", ":3001", "Address to listen on")
+	advertiseF = flag.String("advertise", "127.0.0.1:3001", "Address of this node")
 	joinToF = flag.String("join-to", "", "Address of a node to join")
 	idF = flag.Int64("id", 1, "Node ID")
 )
@@ -36,6 +36,7 @@ func main() {
 
 	r := raft.New(id, service, logStore)
 	go r.Start()
+	go raft.StatsServer(r, "")
 
 	log.Fatal(service.Start())
 }

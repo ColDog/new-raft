@@ -17,7 +17,7 @@ var (
 )
 
 const (
-	FollowerTimeout = 3 * time.Second
+	FollowerTimeout = 7 * time.Second
 	LeaderTimeout = 2 * time.Second
 	CandidateTimeout = 5 * time.Second
 	MaxEntriesPerMessage = 10
@@ -56,6 +56,8 @@ func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 
 type Raft struct {
 	ID uint64
+	BootstrapExpect int
+
 	state State
 
 	leaderID uint64
@@ -112,6 +114,8 @@ func (r *Raft) response() *rpb.Response {
 }
 
 func (r *Raft) respondToAppendEntriesAsFollower(msg *rs.AppendEntriesFuture) {
+	log.Printf("[DEBU] raft: receive append entries: %+v", msg.Msg)
+
 	r.votedFor = 0
 	r.leaderID = msg.Msg.SenderID
 
@@ -203,7 +207,7 @@ func (r *Raft) appendEntriesMsg(entries []*rpb.Entry) *rpb.AppendRequest {
 }
 
 func (r *Raft) sendHeartbeats() {
-	log.Printf("[DEBU] raft: sending heartbeats as %s", r.state.Name())
+	log.Printf("[DEBU] raft: sending heartbeats")
 	msg := r.appendEntriesMsg(nil)
 	r.sendAppendEntries <- &rs.SendAppendEntries{
 		Broadcast: true,
@@ -244,7 +248,9 @@ func (r *Raft) handleAppendEntriesRes(msg *rpb.Response) {
 		r.nextIdx[msg.SenderID] = r.lastSentIdx[msg.SenderID]
 		r.matchIdx[msg.SenderID] = r.lastSentIdx[msg.SenderID]
 	} else {
-		r.nextIdx[msg.SenderID]--
+		if r.nextIdx[msg.SenderID] > 0 {
+			r.nextIdx[msg.SenderID]--
+		}
 	}
 
 	r.checkCommitIdx()
@@ -347,7 +353,7 @@ func (r *Raft) runAsCandidate() {
 		r.state = Follower
 		r.respondToAppendEntriesAsFollower(msg)
 	case <-r.appendEntriesRes:
-		log.Println("[WARN] raft: received unexpected response to append entries")
+		log.Printf("[WARN] raft: received unexpected response to append entries")
 	case msg := <-r.voteReq:
 		r.respondToVoteRequest(msg)
 	case msg := <-r.voteRes:
@@ -359,7 +365,12 @@ func (r *Raft) runAsCandidate() {
 
 func (r *Raft) run() {
 	for {
-		if r.service.NodeCount() > 1 {
+		if r.BootstrapExpect == 0 && r.service.NodeCount() > 1 {
+			break
+		}
+
+		if r.BootstrapExpect == r.service.NodeCount() {
+			log.Printf("[INF0] raft: met bootstrap count of %d", r.BootstrapExpect)
 			break
 		}
 
@@ -369,6 +380,7 @@ func (r *Raft) run() {
 
 	log.Printf("[INFO] raft: starting...")
 	for {
+		prevState := r.state
 		switch r.state {
 		case Leader:
 			r.runAsLeader()
@@ -377,7 +389,10 @@ func (r *Raft) run() {
 		case Follower:
 			r.runAsFollower()
 		}
-		log.Printf("[DEBU] raft: running in state: %s", r.state.Name())
+
+		if r.state != prevState {
+			log.Printf("[INFO] raft: changed to state %s", r.state.Name())
+		}
 	}
 }
 
