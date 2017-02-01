@@ -12,28 +12,28 @@ service Raft {
 }
 
 message Nodes {
-    int64 senderID = 1;
+    uint64 senderID = 1;
     repeated Node nodes = 2;
 }
 
 message AppendRequest {
     // sender ID
-    int64 senderID = 1;
+    uint64 senderID = 1;
 
     // leaders term
-    int64 term = 2;
+    uint64 term = 2;
 
     // leader ID
-    int64 leaderID = 3;
+    uint64 leaderID = 3;
 
     // index of log entry immediately preceding new ones
-    int64 prevLogIdx = 4;
+    uint64 prevLogIdx = 4;
 
     // term of prevLogIdx entry
-    int64 prevLogTerm = 5;
+    uint64 prevLogTerm = 5;
 
     // leader commit index
-    int64 leaderCommitIdx = 6;
+    uint64 leaderCommitIdx = 6;
 
     // log entries to commit
     repeated Entry entries = 7;
@@ -41,36 +41,36 @@ message AppendRequest {
 
 message VoteRequest {
     // candidate term
-    int64 term = 1;
+    uint64 term = 1;
 
     // sender's ID, the candidate
-    int64 candidateID = 2;
+    uint64 candidateID = 2;
 
     // last log entry information
-    int64 lastLogIdx = 3;
-    int64 lastLogTerm = 4;
+    uint64 lastLogIdx = 3;
+    uint64 lastLogTerm = 4;
 }
 
 message Entry {
-    int64 term = 1;
-    int64 idx = 2;
+    uint64 term = 1;
+    uint64 idx = 2;
     bytes command = 3;
 }
 
 message Node {
-    int64 ID = 1;
+    uint64 ID = 1;
     string addr = 2;
 }
 
 message Response {
-    int64 senderID = 1;
+    uint64 senderID = 1;
     string error = 2;
     bool accepted = 3;
-    int64 term = 4;
-    int64 leaderID = 5;
-    int64 lastAppliedIdx = 6;
+    uint64 term = 4;
+    uint64 leaderID = 5;
+    uint64 lastAppliedIdx = 6;
 }
 
 message Ack {
-    int64 senderID = 1;
+    uint64 senderID = 1;
 }

@@ -30,21 +30,22 @@ const (
 )
 
 type Raft struct {
-	ID int64
+	ID uint64
 	state State
 
-	leaderID int64
-	currentTerm int64
-	votedFor int64
+	leaderID uint64
+	currentTerm uint64
+	votedFor uint64
 	voteCount int
 	logStore store.Store
 
-	commitIdx int64
-	lastAppliedIdx int64
-	lastAppliedTerm int64
+	commitIdx uint64
+	lastAppliedIdx uint64
+	lastAppliedTerm uint64
 
-	nextIdx map[int64]int64
-	matchIdx map[int64]int64
+	nextIdx map[uint64]uint64
+	matchIdx map[uint64]uint64
+	lastSentIdx map[uint64]uint64
 
 	service rs.RaftService
 
@@ -175,7 +176,7 @@ func (r *Raft) sendHeartbeats() {
 }
 
 func (r *Raft) sendLogEntries() {
-	for _, n := range r.service.Nodes() {
+	for _, n := range r.service.ListNodes() {
 		nextIdx := r.nextIdx[n.ID]
 		if r.lastAppliedIdx <= nextIdx {
 			continue
@@ -187,12 +188,28 @@ func (r *Raft) sendLogEntries() {
 			continue
 		}
 
+		r.lastSentIdx[n.ID] = entries[len(entries) - 1].Idx
 		msg := r.appendEntriesMsg(entries)
 		r.sendAppendEntries <- &rs.SendAppendEntries{
 			ID: n.ID,
 			Msg: msg,
 		}
 	}
+}
+
+func (r *Raft) handleAppendEntriesRes(msg *rpb.Response) {
+	if msg.Accepted {
+		r.nextIdx[msg.SenderID] = r.lastSentIdx[msg.SenderID]
+		r.matchIdx[msg.SenderID] = r.lastSentIdx[msg.SenderID]
+	} else {
+		r.nextIdx[msg.SenderID]--
+	}
+
+	r.checkCommitIdx()
+}
+
+func (r *Raft) checkCommitIdx() {
+
 }
 
 func (r *Raft) runAsLeader() {
@@ -204,10 +221,9 @@ func (r *Raft) runAsLeader() {
 		}
 		r.respondToAppendEntriesAsFollower(msg)
 	case msg := <-r.appendEntriesRes:
-
+		r.handleAppendEntriesRes(msg)
 	case msg := <-r.voteReq:
 		r.respondToVoteRequest(msg)
-
 	case <-r.voteRes:
 		log.Println("[WARN] raft: received unexpected response to vote")
 	case <-time.After(LeaderTimeout):
