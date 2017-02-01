@@ -38,9 +38,9 @@ func (n *RaftGRPCNode) connect() error {
 }
 
 type RaftGRPCService struct {
-	ID int64
+	ID uint64
 	Addr string
-	Nodes map[int64]*RaftGRPCNode
+	Nodes map[uint64]*RaftGRPCNode
 	lock  *sync.RWMutex
 	listen string
 	joinOnBoot []string
@@ -56,7 +56,7 @@ type RaftGRPCService struct {
 
 func (s *RaftGRPCService) Configure(c *Config) {
 	if c.ID == 0 {
-		s.ID = int64(rand.Intn(10000))
+		s.ID = uint64(rand.Intn(10000))
 	} else {
 		s.ID = c.ID
 	}
@@ -65,7 +65,7 @@ func (s *RaftGRPCService) Configure(c *Config) {
 	s.listen = c.Listen
 	s.lock = &sync.RWMutex{}
 	s.joinOnBoot = c.JoinOnBoot
-	s.Nodes = map[int64]*RaftGRPCNode{}
+	s.Nodes = map[uint64]*RaftGRPCNode{}
 	s.Nodes[s.ID] = &RaftGRPCNode{Node: &rpb.Node{s.ID, c.Advertise}}
 	s.sendAppendEntries = make(chan *SendAppendEntries, chanBuffer)
 	s.appendEntriesReq = make(chan *AppendEntriesFuture, chanBuffer)
@@ -116,7 +116,7 @@ func (s *RaftGRPCService) VoteRequestResChan() chan *rpb.Response {
 	return s.voteRes
 }
 
-func (s *RaftGRPCService) GetNode(id int64) *rpb.Node {
+func (s *RaftGRPCService) GetNode(id uint64) *rpb.Node {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	if node, ok := s.Nodes[id]; ok {
@@ -129,7 +129,7 @@ func (s *RaftGRPCService) ListNodes() []*rpb.Node {
 	return s.nodeList()
 }
 
-func (s *RaftGRPCService) getNode(id int64) (*RaftGRPCNode, error) {
+func (s *RaftGRPCService) getNode(id uint64) (*RaftGRPCNode, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	node, ok := s.Nodes[id]
@@ -289,8 +289,8 @@ func (s *RaftGRPCService) deliverVoteRequest(msg *SendVoteRequest) error {
 	return nil
 }
 
-func (s *RaftGRPCService) randNodeID() int64 {
-	var nodeId int64
+func (s *RaftGRPCService) randNodeID() uint64 {
+	var nodeId uint64
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	for id, _ := range s.Nodes {
@@ -357,7 +357,7 @@ func (s *RaftGRPCService) syncNode(n *rpb.Node) {
 	}
 }
 
-func (s *RaftGRPCService) removeNode(id int64) {
+func (s *RaftGRPCService) removeNode(id uint64) {
 	if id == s.ID { return }
 
 	s.lock.RLock()

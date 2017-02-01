@@ -8,7 +8,7 @@ import (
 var ErrNoNode = errors.New("no node")
 
 type Config struct {
-	ID int64
+	ID uint64
 	Listen string
 	Advertise string
 	JoinOnBoot []string
@@ -22,7 +22,7 @@ type RaftService interface {
 	VoteRequestReqChan() chan *VoteRequestFuture
 	VoteRequestResChan() chan *rpb.Response
 
-	GetNode(int64) *rpb.Node
+	GetNode(uint64) *rpb.Node
 	ListNodes() []*rpb.Node
 	NodeCount() int
 
@@ -31,13 +31,13 @@ type RaftService interface {
 }
 
 type SendAppendEntries struct {
-	ID int64
+	ID uint64
 	Broadcast bool
 	Msg *rpb.AppendRequest
 }
 
 type SendVoteRequest struct {
-	ID int64
+	ID uint64
 	Broadcast bool
 	Msg *rpb.VoteRequest
 }

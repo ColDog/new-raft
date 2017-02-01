@@ -19,15 +19,24 @@ const (
 	FollowerTimeout = 300 * time.Millisecond
 	LeaderTimeout = 300 * time.Millisecond
 	CandidateTimeout = 300 * time.Millisecond
+	MaxEntriesPerMessage = 10
 )
 
 type State int
 
 const (
-	Candidate = iota
+	Candidate State = iota
 	Follower
 	Leader
 )
+
+func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
+	return &Raft{
+		ID: id,
+		service: srvc,
+		logStore: store,
+	}
+}
 
 type Raft struct {
 	ID uint64
@@ -99,32 +108,37 @@ func (r *Raft) respondToAppendEntriesAsFollower(msg *rs.AppendEntriesFuture) {
 		return
 	}
 
-	prevEntry, err := r.logStore.Get(msg.Msg.PrevLogIdx)
-	if err != nil {
-		log.Printf("[WARN] raft: could not get previous log entry: %v", err)
-		msg.Response <- r.errResponse(err)
-		return
-	}
-
-	if prevEntry.Term != msg.Msg.PrevLogTerm {
-		log.Printf("[WARN] raft: prev log entry (%d) does not match: %v", msg.Msg.PrevLogIdx, err)
-		msg.Response <- r.errResponse(ErrTermNotMatch)
-
-		// delete all future terms
-		err = r.logStore.DeleteAllFrom(msg.Msg.PrevLogIdx)
+	if msg.Msg.PrevLogIdx != 0 {
+		prevEntry, err := r.logStore.Get(msg.Msg.PrevLogIdx)
 		if err != nil {
-			log.Printf("[WARN] raft: error removing entries: %v", err)
+			log.Printf("[WARN] raft: could not get previous log entry: %v", err)
+			msg.Response <- r.errResponse(err)
+			return
 		}
-		return
+
+		if prevEntry.Term != msg.Msg.PrevLogTerm {
+			log.Printf("[WARN] raft: prev log entry (%d) does not match: %v", msg.Msg.PrevLogIdx, err)
+			msg.Response <- r.errResponse(ErrTermNotMatch)
+
+			// delete all future terms
+			err = r.logStore.DeleteFrom(msg.Msg.PrevLogIdx)
+			if err != nil {
+				log.Printf("[WARN] raft: error removing entries: %v", err)
+			}
+			return
+		}
 	}
 
-	err = r.logStore.Add(msg.Msg.Entries...)
-	if err != nil {
-		log.Printf("[WARN] raft: error adding entries: %v", err)
-		msg.Response <- r.errResponse(err)
-		return
+	if len(msg.Msg.Entries) > 0 {
+		lastIdx, err := r.logStore.Add(msg.Msg.Entries...)
+		if err != nil {
+			log.Printf("[WARN] raft: error adding entries: %v", err)
+			msg.Response <- r.errResponse(err)
+			return
+		}
+		r.lastAppliedIdx = lastIdx
+		r.commitIdx = min(r.lastAppliedIdx, msg.Msg.LeaderCommitIdx)
 	}
-	r.commitIdx = min(msg.Msg.LastEntryIdx, msg.Msg.LeaderCommitIdx)
 	msg.Response <- r.response()
 }
 
@@ -161,7 +175,7 @@ func (r *Raft) appendEntriesMsg(entries []*rpb.Entry) *rpb.AppendRequest {
 		Term: r.currentTerm,
 		LeaderID: r.leaderID,
 		PrevLogIdx: r.lastAppliedIdx,
-		PrevLogIdx: r.lastAppliedTerm,
+		PrevLogTerm: r.lastAppliedTerm,
 		LeaderCommitIdx: r.commitIdx,
 		Entries: entries,
 	}
@@ -182,7 +196,7 @@ func (r *Raft) sendLogEntries() {
 			continue
 		}
 
-		entries, err := r.logStore.GetAllFrom(nextIdx)
+		entries, err := r.logStore.GetFrom(nextIdx, MaxEntriesPerMessage)
 		if err != nil {
 			log.Printf("[ERRO] raft: could not get log entries: %v", err)
 			continue
