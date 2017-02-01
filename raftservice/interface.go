@@ -22,7 +22,8 @@ type RaftService interface {
 	VoteRequestReqChan() chan *VoteRequestFuture
 	VoteRequestResChan() chan *rpb.Response
 
-	Nodes() []*rpb.Node
+	GetNode(int64) *rpb.Node
+	ListNodes() []*rpb.Node
 	NodeCount() int
 
 	Configure(*Config)

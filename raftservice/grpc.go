@@ -116,7 +116,20 @@ func (s *RaftGRPCService) VoteRequestResChan() chan *rpb.Response {
 	return s.voteRes
 }
 
-func (s *RaftGRPCService) GetNode(id int64) (*RaftGRPCNode, error) {
+func (s *RaftGRPCService) GetNode(id int64) *rpb.Node {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	if node, ok := s.Nodes[id]; ok {
+		return node.Node
+	}
+	return nil
+}
+
+func (s *RaftGRPCService) ListNodes() []*rpb.Node {
+	return s.nodeList()
+}
+
+func (s *RaftGRPCService) getNode(id int64) (*RaftGRPCNode, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	node, ok := s.Nodes[id]
@@ -247,7 +260,7 @@ func (s *RaftGRPCService) ClusterState(ctx context.Context, req *rpb.Nodes) (*rp
 }
 
 func (s *RaftGRPCService) deliverAppendEntries(msg *SendAppendEntries) error {
-	node, err := s.GetNode(msg.ID)
+	node, err := s.getNode(msg.ID)
 	if err != nil {
 		return err
 	}
@@ -262,7 +275,7 @@ func (s *RaftGRPCService) deliverAppendEntries(msg *SendAppendEntries) error {
 }
 
 func (s *RaftGRPCService) deliverVoteRequest(msg *SendVoteRequest) error {
-	node, err := s.GetNode(msg.ID)
+	node, err := s.getNode(msg.ID)
 	if err != nil {
 		return err
 	}
@@ -290,7 +303,7 @@ func (s *RaftGRPCService) randNodeID() int64 {
 }
 
 func (s *RaftGRPCService) pingClusterState() error {
-	node, err := s.GetNode(s.randNodeID())
+	node, err := s.getNode(s.randNodeID())
 	if err != nil {
 		return err
 	}
@@ -386,7 +399,6 @@ func (s *RaftGRPCService) nodeList() []*rpb.Node {
 	}
 	return nodes
 }
-
 
 func (s *RaftGRPCService) catchInterrupt() {
 	c := make(chan os.Signal, 1)
