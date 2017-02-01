@@ -12,10 +12,10 @@ type Store interface {
 	Add(...*rpb.Entry) (uint64, error)
 	Get(uint64) (*rpb.Entry, error)
 	DeleteFrom(uint64) error
-	GetFrom(uint64, int) ([]*rpb.Entry, error)
+	GetFrom(uint64, int) (uint64, []*rpb.Entry, error)
 }
 
-func NewInMem() Store {
+func NewInMem() *InMemStore {
 	return &InMemStore{
 		entries: make(map[uint64]*rpb.Entry),
 		lock: &sync.RWMutex{},
@@ -60,22 +60,23 @@ func (s *InMemStore) DeleteFrom(idx uint64) error {
 	return nil
 }
 
-func (s *InMemStore) GetFrom(idx uint64, limit int) ([]*rpb.Entry, error) {
+func (s *InMemStore) GetFrom(idx uint64, limit int) (max uint64, entries []*rpb.Entry, err error) {
 	if limit == 0 {
 		limit = 10
 	}
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-
-	entries := make([]*rpb.Entry, 0)
 	for _, e := range s.entries {
+		if e.Idx > max {
+			max = e.Idx
+		}
 		if e.Idx > idx {
 			entries = append(entries, e)
 		}
 
 		if len(entries) >= limit {
-			return entries, nil
+			return
 		}
 	}
-	return entries, nil
+	return
 }

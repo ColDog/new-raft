@@ -6,6 +6,7 @@ import (
 	"github.com/coldog/raft/rpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/coldog/raft/store"
+	"time"
 	"fmt"
 )
 
@@ -137,6 +138,21 @@ func TestRaft_AppendEntriesResponseWithoutLogs(t *testing.T) {
 	assert.False(t, res.Accepted)
 }
 
+func TestRaft_LeaderHeartbeats(t *testing.T) {
+	setupTestRaft()
+
+	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3004"}
+	service.Nodes[3] = &rpb.Node{3, "127.0.0.1:3005"}
+
+	c := service.SendAppendEntriesChan()
+
+	testRaft.sendHeartbeats()
+	time.Sleep(1 * time.Second)
+
+	msg := <- c
+	assert.True(t, msg.Broadcast)
+}
+
 func TestRaft_LeaderSendEntries(t *testing.T) {
 	setupTestRaft()
 
@@ -150,11 +166,54 @@ func TestRaft_LeaderSendEntries(t *testing.T) {
 	testRaft.logStore.Add(
 		&rpb.Entry{Idx: 1, Command: []byte("testing"), Term: 2},
 		&rpb.Entry{Idx: 2, Command: []byte("testing"), Term: 2},
+		&rpb.Entry{Idx: 3, Command: []byte("testing"), Term: 2},
 	)
+
+	c := service.SendAppendEntriesChan()
 
 	testRaft.sendLogEntries()
 
-	c := service.SendAppendEntriesChan()
+	msg1 := <- c
+	res := &rpb.Response{
+		SenderID: msg1.ID,
+		Accepted: true,
+	}
+	testRaft.handleAppendEntriesRes(res)
+
+	assert.Equal(t, uint64(3), testRaft.matchIdx[msg1.ID])
+	assert.Equal(t, uint64(3), testRaft.matchIdx[msg1.ID])
+	assert.Equal(t, uint64(3), testRaft.lastSentIdx[msg1.ID])
+
+	fmt.Printf("%+v\n", testRaft.lastSentIdx)
+	fmt.Printf("%+v\n", service.Nodes)
+	fmt.Printf("%+v\n", logStore)
+}
+
+func TestRaft_RunAsFollowerElectionTimeout(t *testing.T) {
+	setupTestRaft()
+
+	testRaft.runAsFollower()
+
+	c := service.SendVoteRequestChan()
 	msg := <- c
-	fmt.Printf("msg: %+v\n", msg)
+
+	assert.Equal(t, uint64(1), msg.Msg.CandidateID)
+}
+
+func TestRaft_Election(t *testing.T) {
+	setupTestRaft()
+
+	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3004"}
+	service.Nodes[3] = &rpb.Node{2, "127.0.0.1:3004"}
+
+	testRaft.runAsFollower()
+
+	c := service.SendVoteRequestChan()
+	msg := <- c
+
+	assert.Equal(t, uint64(1), msg.Msg.CandidateID)
+
+	testRaft.handleVoteResponse(&rpb.Response{SenderID: 2, Accepted: true})
+
+	assert.Equal(t, Leader, testRaft.state)
 }

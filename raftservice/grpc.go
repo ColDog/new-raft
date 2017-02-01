@@ -14,6 +14,10 @@ import (
 	"math/rand"
 )
 
+const (
+	GossipPingInterval = 10 * time.Second
+)
+
 func init() {
 	rand.Seed(time.Now().UnixNano())
 }
@@ -129,33 +133,21 @@ func (s *RaftGRPCService) ListNodes() []*rpb.Node {
 	return s.nodeList()
 }
 
-func (s *RaftGRPCService) getNode(id uint64) (*RaftGRPCNode, error) {
+func (s *RaftGRPCService) NodeCount() int {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	node, ok := s.Nodes[id]
-	if !ok {
-		return nil, ErrNoNode
-	}
-
-	if node.client == nil {
-		err := node.connect()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return node, nil
+	return len(s.Nodes)
 }
 
 func (s *RaftGRPCService) AppendEntries(ctx context.Context, req *rpb.AppendRequest) (*rpb.Response, error) {
-	resCh := make(chan *rpb.Response)
+	resCh := make(chan *rpb.Response, 2)
 	s.appendEntriesReq <- &AppendEntriesFuture{req, resCh}
 	res := <- resCh
 	return res, nil
 }
 
 func (s *RaftGRPCService) RequestVote(ctx context.Context, req *rpb.VoteRequest) (*rpb.Response, error) {
-	resCh := make(chan *rpb.Response)
+	resCh := make(chan *rpb.Response, 2)
 	s.voteReq <- &VoteRequestFuture{req, resCh}
 	res := <- resCh
 	return res, nil
@@ -259,34 +251,71 @@ func (s *RaftGRPCService) ClusterState(ctx context.Context, req *rpb.Nodes) (*rp
 	return res, nil
 }
 
-func (s *RaftGRPCService) deliverAppendEntries(msg *SendAppendEntries) error {
-	node, err := s.getNode(msg.ID)
+func (s *RaftGRPCService) deliverAppendEntries(msg *rpb.AppendRequest) sendMsgFunc {
+	return func(node *RaftGRPCNode) error {
+		res, err := node.client.AppendEntries(context.Background(), msg)
+		if err != nil {
+			return err
+		}
+
+		s.appendEntriesRes <- res
+		return nil
+	}
+}
+
+func (s *RaftGRPCService) deliverVoteRequest(msg *rpb.VoteRequest) sendMsgFunc {
+	return func(node *RaftGRPCNode) error {
+		res, err := node.client.RequestVote(context.Background(), msg)
+		if err != nil {
+			return nil
+		}
+		s.voteRes <- res
+		return nil
+	}
+}
+
+func (s *RaftGRPCService) pingClusterState(node *RaftGRPCNode) error {
+	log.Printf("[DEBU] service: pinging cluster state to %d as %d", node.ID, s.ID)
+	res, err := node.client.ClusterState(context.Background(), &rpb.Nodes{Nodes: s.nodeList()})
 	if err != nil {
 		return err
 	}
-
-	res, err := node.client.AppendEntries(context.Background(), msg.Msg)
-	if err != nil {
-		return err
-	}
-
-	s.appendEntriesRes <- res
+	s.syncNodesL(res.Nodes)
 	return nil
 }
 
-func (s *RaftGRPCService) deliverVoteRequest(msg *SendVoteRequest) error {
-	node, err := s.getNode(msg.ID)
-	if err != nil {
-		return err
+func (s *RaftGRPCService) runGossip() {
+	for {
+		err := s.send(s.randNodeID(), s.pingClusterState)
+		if err != nil {
+			log.Printf("[ERRO] service: could not ping state: %v", err)
+		}
+		time.Sleep(GossipPingInterval)
 	}
+}
 
-	res, err := node.client.RequestVote(context.Background(), msg.Msg)
-	if err != nil {
-		return err
+func (s *RaftGRPCService) run() {
+	for {
+		var err error
+		select {
+		case msg := <- s.sendAppendEntries:
+			if msg.Broadcast {
+				s.broadcast(s.deliverAppendEntries(msg.Msg))
+			} else {
+				s.send(msg.ID, s.deliverAppendEntries(msg.Msg))
+			}
+		case msg := <-s.sendVoteReq:
+			if msg.Broadcast {
+				s.broadcast(s.deliverVoteRequest(msg.Msg))
+			} else {
+				s.send(msg.ID, s.deliverVoteRequest(msg.Msg))
+			}
+		}
+
+		if err != nil {
+			log.Printf("[ERRO] service: could not send msg: %v", err)
+		}
 	}
-
-	s.voteRes <- res
-	return nil
 }
 
 func (s *RaftGRPCService) randNodeID() uint64 {
@@ -300,45 +329,6 @@ func (s *RaftGRPCService) randNodeID() uint64 {
 		}
 	}
 	return nodeId
-}
-
-func (s *RaftGRPCService) pingClusterState() error {
-	node, err := s.getNode(s.randNodeID())
-	if err != nil {
-		return err
-	}
-
-	log.Printf("[DEBU] service: pinging cluster state to %d as %d", node.ID, s.ID)
-
-	res, err := node.client.ClusterState(context.Background(), &rpb.Nodes{Nodes: s.nodeList()})
-	if err != nil {
-		return err
-	}
-
-	s.syncNodesL(res.Nodes)
-	return nil
-}
-
-func (s *RaftGRPCService) run() {
-	for {
-		select {
-		case msg := <- s.sendAppendEntries:
-			err := s.deliverAppendEntries(msg)
-			if err != nil {
-				log.Printf("[ERRO] service: could not send msg: %d, %v", msg.ID, err)
-			}
-		case msg := <-s.sendVoteReq:
-			err := s.deliverVoteRequest(msg)
-			if err != nil {
-				log.Printf("[ERRO] service: could not send msg: %d, %v", msg.ID, err)
-			}
-		case <-time.After(10 * time.Second):
-			err := s.pingClusterState()
-			if err != nil {
-				log.Printf("[ERRO] service: could not ping state: %v", err)
-			}
-		}
-	}
 }
 
 func (s *RaftGRPCService) syncNode(n *rpb.Node) {
@@ -387,6 +377,51 @@ func (s *RaftGRPCService) syncNodes(nodes []*rpb.Node) {
 			s.Nodes[n.ID] = node
 		}
 	}
+}
+
+type sendMsgFunc func(n *RaftGRPCNode) error
+
+func (s *RaftGRPCService) broadcast(callback sendMsgFunc) {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	for _, node := range s.Nodes {
+		if node.ID == s.ID {
+			continue
+		}
+
+		if node.client == nil {
+			err := node.connect()
+			if err != nil {
+				continue
+			}
+		}
+
+		go callback(node)
+	}
+}
+
+func (s *RaftGRPCService) send(id uint64, callback sendMsgFunc) error {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	if s.ID == id {
+		return ErrNoNode
+	}
+
+	node, ok := s.Nodes[id]
+	if !ok {
+		return ErrNoNode
+	}
+
+	if node.client == nil {
+		err := node.connect()
+		if err != nil {
+			return err
+		}
+	}
+
+	return callback(node)
 }
 
 func (s *RaftGRPCService) nodeList() []*rpb.Node {

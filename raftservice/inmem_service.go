@@ -62,6 +62,7 @@ func (s *RaftMockService) Configure(c *Config) {
 	s.joinOnBoot = c.JoinOnBoot
 	s.Nodes = map[uint64]*rpb.Node{}
 	s.Nodes[s.id] = &rpb.Node{s.id, c.Advertise}
+
 	s.sendAppendEntries = make(chan *SendAppendEntries, chanBuffer)
 	s.appendEntriesReq = make(chan *AppendEntriesFuture, chanBuffer)
 	s.appendEntriesRes = make(chan *rpb.Response, chanBuffer)
