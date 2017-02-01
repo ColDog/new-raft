@@ -6,21 +6,30 @@ import (
 	"github.com/coldog/raft/rpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/coldog/raft/store"
+	"fmt"
 )
 
 var testRaft *Raft
+var service *rs.RaftMockService
+var logStore *store.InMemStore
 
-func init()  {
-	service := &rs.RaftMockService{}
-	service.Configure(&rs.Config{})
+func setupTestRaft()  {
+	service = &rs.RaftMockService{}
+	service.Configure(&rs.Config{
+		ID: 1,
+		Advertise: "127.0.0.1:3000",
+		Listen: "127.0.0.1:3000",
+	})
 	go service.Start()
 
-	st := store.NewInMem()
+	logStore = store.NewInMem()
 
-	testRaft = New(1, service, st)
+	testRaft = New(1, service, logStore)
 }
 
-func TestRaft_RequestVotResponse(t *testing.T) {
+func TestRaft_RequestVoteResponse(t *testing.T) {
+	setupTestRaft()
+
 	c := make(chan *rpb.Response, 2)
 
 	vr := &rpb.VoteRequest{
@@ -42,6 +51,8 @@ func TestRaft_RequestVotResponse(t *testing.T) {
 }
 
 func TestRaft_AppendEntriesResponseNoEntry(t *testing.T) {
+	setupTestRaft()
+
 	c := make(chan *rpb.Response, 2)
 
 	ar := &rpb.AppendRequest{
@@ -67,6 +78,8 @@ func TestRaft_AppendEntriesResponseNoEntry(t *testing.T) {
 }
 
 func TestRaft_AppendEntriesResponseNewEntries(t *testing.T) {
+	setupTestRaft()
+
 	c := make(chan *rpb.Response, 2)
 
 	ar := &rpb.AppendRequest{
@@ -99,6 +112,8 @@ func TestRaft_AppendEntriesResponseNewEntries(t *testing.T) {
 }
 
 func TestRaft_AppendEntriesResponseWithoutLogs(t *testing.T) {
+	setupTestRaft()
+
 	c := make(chan *rpb.Response, 2)
 
 	ar := &rpb.AppendRequest{
@@ -120,4 +135,26 @@ func TestRaft_AppendEntriesResponseWithoutLogs(t *testing.T) {
 	// cannot find previous entry
 	res := <- c
 	assert.False(t, res.Accepted)
+}
+
+func TestRaft_LeaderSendEntries(t *testing.T) {
+	setupTestRaft()
+
+	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3004"}
+	service.Nodes[3] = &rpb.Node{3, "127.0.0.1:3005"}
+
+	testRaft.commitIdx = 1
+	testRaft.lastAppliedIdx = 1
+	testRaft.lastAppliedTerm = 2
+	testRaft.currentTerm = 2
+	testRaft.logStore.Add(
+		&rpb.Entry{Idx: 1, Command: []byte("testing"), Term: 2},
+		&rpb.Entry{Idx: 2, Command: []byte("testing"), Term: 2},
+	)
+
+	testRaft.sendLogEntries()
+
+	c := service.SendAppendEntriesChan()
+	msg := <- c
+	fmt.Printf("msg: %+v\n", msg)
 }

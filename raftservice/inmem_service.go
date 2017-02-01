@@ -9,7 +9,7 @@ import (
 type RaftMockService struct {
 	id uint64
 	addr string
-	nodes map[uint64]*rpb.Node
+	Nodes map[uint64]*rpb.Node
 	lock  *sync.RWMutex
 	listen string
 	joinOnBoot []string
@@ -30,20 +30,20 @@ func (s *RaftMockService) Start() error {
 func (s *RaftMockService) NodeCount() int {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return len(s.nodes)
+	return len(s.Nodes)
 }
 
 func (s *RaftMockService) GetNode(id uint64) *rpb.Node {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.nodes[id]
+	return s.Nodes[id]
 }
 
 func (s *RaftMockService) ListNodes() []*rpb.Node {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	nodes := make([]*rpb.Node, 0, len(s.nodes))
-	for _, n := range s.nodes {
+	nodes := make([]*rpb.Node, 0, len(s.Nodes))
+	for _, n := range s.Nodes {
 		nodes = append(nodes, n)
 	}
 	return nodes
@@ -60,8 +60,8 @@ func (s *RaftMockService) Configure(c *Config) {
 	s.listen = c.Listen
 	s.lock = &sync.RWMutex{}
 	s.joinOnBoot = c.JoinOnBoot
-	s.nodes = map[uint64]*rpb.Node{}
-	s.nodes[s.id] = &rpb.Node{s.id, c.Advertise}
+	s.Nodes = map[uint64]*rpb.Node{}
+	s.Nodes[s.id] = &rpb.Node{s.id, c.Advertise}
 	s.sendAppendEntries = make(chan *SendAppendEntries, chanBuffer)
 	s.appendEntriesReq = make(chan *AppendEntriesFuture, chanBuffer)
 	s.appendEntriesRes = make(chan *rpb.Response, chanBuffer)
