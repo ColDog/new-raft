@@ -30,12 +30,14 @@ type InMemStore struct {
 func (s *InMemStore) Add(entries ...*rpb.Entry) (uint64, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	var last uint64
+	var max uint64
 	for _, e := range entries {
 		s.entries[e.Idx] = e
-		last = e.Idx
+		if e.Idx > max {
+			max = e.Idx
+		}
 	}
-	return last, nil
+	return max, nil
 }
 
 func (s *InMemStore) Get(idx uint64) (*rpb.Entry, error) {

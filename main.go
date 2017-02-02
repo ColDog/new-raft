@@ -4,10 +4,12 @@ import (
 	"github.com/coldog/raft/raft"
 	"github.com/coldog/raft/store"
 	"github.com/coldog/raft/raftservice"
+	"github.com/hashicorp/logutils"
 
 	"log"
 	"flag"
 	"strings"
+	"os"
 )
 
 var (
@@ -24,6 +26,13 @@ func main() {
 	var service raftservice.RaftService
 	var logStore store.Store
 
+	filter := &logutils.LevelFilter{
+		Levels: []logutils.LogLevel{"DEBU", "WARN", "ERRO"},
+		MinLevel: logutils.LogLevel("DEBU"),
+		Writer: os.Stderr,
+	}
+	log.SetOutput(filter)
+
 	service = &raftservice.RaftGRPCService{}
 	service.Configure(&raftservice.Config{
 		ID: id,
@@ -35,8 +44,10 @@ func main() {
 	logStore = store.NewInMem()
 
 	r := raft.New(id, service, logStore)
+	r.BootstrapExpect = 3
+
 	go r.Start()
-	go raft.StatsServer(r, "")
+	go raft.DebugServer(r, "")
 
 	log.Fatal(service.Start())
 }

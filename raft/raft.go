@@ -18,9 +18,9 @@ var (
 )
 
 const (
-	FollowerTimeout = 7 * time.Second
+	FollowerTimeout = 3 * time.Second
 	LeaderTimeout = 2 * time.Second
-	CandidateTimeout = 5 * time.Second
+	CandidateTimeout = 6 * time.Second
 	MaxEntriesPerMessage = 10
 )
 
@@ -155,8 +155,6 @@ func (r *Raft) response() *rpb.Response {
 }
 
 func (r *Raft) respondToAppendEntriesAsFollower(msg *rs.AppendEntriesFuture) {
-	log.Printf("[DEBU] raft: receive append entries: %+v", msg.Msg)
-
 	r.votedFor = 0
 	r.leaderID = msg.Msg.SenderID
 
@@ -198,13 +196,15 @@ func (r *Raft) respondToAppendEntriesAsFollower(msg *rs.AppendEntriesFuture) {
 			return
 		}
 		r.lastAppliedIdx = lastIdx
-
-		n := min(r.lastAppliedIdx, msg.Msg.LeaderCommitIdx)
-		if n > r.commitIdx {
-			r.commitIdx = n
-			r.commitIdxEvents.publish(n)
-		}
+		r.lastAppliedTerm = r.currentTerm
 	}
+
+	n := min(r.lastAppliedIdx, msg.Msg.LeaderCommitIdx)
+	if n > r.commitIdx {
+		r.commitIdx = n
+		r.commitIdxEvents.publish(n)
+	}
+
 	msg.Response <- r.response()
 }
 
@@ -230,33 +230,32 @@ func (r *Raft) runAsFollower() {
 	case req := <-r.addEntries:
 		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
 		r.respondToAppendEntriesAsFollower(msg)
 	case msg := <-r.voteReq:
+		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.state.Name(), msg.Msg.CandidateID)
 		r.respondToVoteRequest(msg)
-	case <-r.appendEntriesRes:
-		log.Println("[WARN] raft: received unexpected response to append entries")
-	case <-r.voteRes:
-		log.Println("[WARN] raft: received unexpected response to vote")
+	case msg := <-r.appendEntriesRes:
+		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.state.Name(), msg.SenderID)
+	case msg := <-r.voteRes:
+		log.Printf("[DEBU] raft: %s receive vote response from %d", r.state.Name(), msg.SenderID)
 	case <-time.After(jitter(FollowerTimeout)):
+		log.Printf("[DEBU] raft: %s follower timeout, converting to candidate", r.state.Name())
 		r.toCandidate()
 	}
 }
 
-func (r *Raft) appendEntriesMsg(entries []*rpb.Entry) *rpb.AppendRequest {
+func (r *Raft) appendEntriesMsg() *rpb.AppendRequest {
 	return &rpb.AppendRequest{
 		SenderID: r.ID,
 		Term: r.currentTerm,
 		LeaderID: r.leaderID,
-		PrevLogIdx: r.lastAppliedIdx,
-		PrevLogTerm: r.lastAppliedTerm,
 		LeaderCommitIdx: r.commitIdx,
-		Entries: entries,
 	}
 }
 
 func (r *Raft) sendHeartbeats() {
-	log.Printf("[DEBU] raft: sending heartbeats")
-	msg := r.appendEntriesMsg(nil)
+	msg := r.appendEntriesMsg()
 	r.sendAppendEntries <- &rs.SendAppendEntries{
 		Broadcast: true,
 		Msg: msg,
@@ -268,24 +267,38 @@ func (r *Raft) sendLogEntries() {
 		if n.ID == r.ID {
 			continue
 		}
+		msg := r.appendEntriesMsg()
 
 		nextIdx := r.nextIdx[n.ID]
 		if r.lastAppliedIdx <= nextIdx {
-			r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, r.appendEntriesMsg(nil)}
+			log.Printf("[DEBU] raft: send heartbeat to: %d", n.ID)
+			r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, msg}
 			continue
 		}
 
 		lastSentIdx, entries, err := r.logStore.GetFrom(nextIdx, MaxEntriesPerMessage)
 		if err != nil {
 			log.Printf("[ERRO] raft: could not get log entries: %v", err)
-			r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, r.appendEntriesMsg(nil)}
+			r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, msg}
 			continue
 		}
 
 		r.lastSentIdx[n.ID] = lastSentIdx
 
 		log.Printf("[DEBU] raft: send entries to: %d", n.ID)
-		msg := r.appendEntriesMsg(entries)
+
+		if r.matchIdx[n.ID] != 0 {
+			prevLogEntry, err := r.logStore.Get(r.matchIdx[n.ID])
+			if err != nil {
+				log.Printf("[ERRO] raft: could not get log entries: %v", err)
+				r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, msg}
+				continue
+			}
+			msg.PrevLogTerm = prevLogEntry.Term
+			msg.PrevLogIdx = prevLogEntry.Idx
+		}
+
+		msg.Entries = entries
 		r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, msg}
 	}
 }
@@ -357,6 +370,7 @@ func (r *Raft) applyLogEntry(req *addEntryFuture) {
 	}
 
 	r.lastAppliedIdx = nextIdx
+	r.lastAppliedTerm = r.currentTerm
 	req.response <- &addEntryResponse{nextIdx, err}
 }
 
@@ -365,20 +379,22 @@ func (r *Raft) runAsLeader() {
 	case req := <-r.addEntries:
 		r.applyLogEntry(req)
 	case msg := <-r.appendEntriesReq:
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
 		if msg.Msg.Term >= r.currentTerm {
-			log.Printf("[DEBU] raft: leader received append entries from greater term %+v", msg.Msg)
+			log.Printf("[INFO] raft: leader received append entries from greater term %+v", msg.Msg)
 			r.state = Follower
 			r.currentTerm = msg.Msg.Term
 		}
 		r.respondToAppendEntriesAsFollower(msg)
-	case msg := <-r.appendEntriesRes:
-		r.handleAppendEntriesRes(msg)
+	case res := <-r.appendEntriesRes:
+		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.state.Name(), res.SenderID)
+		r.handleAppendEntriesRes(res)
 	case msg := <-r.voteReq:
+		log.Printf("[DEBU] raft: %s receive voteRequest from %d", r.state.Name(), msg.Msg.CandidateID)
 		r.respondToVoteRequest(msg)
-	case <-r.voteRes:
-		log.Println("[WARN] raft: received unexpected response to vote")
+	case res := <-r.voteRes:
+		log.Printf("[DEBU] raft: %s receive vote response from %d", r.state.Name(), res.SenderID)
 	case <-time.After(jitter(LeaderTimeout)):
-		log.Printf("[INFO] raft: sending log entries")
 		 r.sendLogEntries()
 	}
 }
@@ -411,6 +427,7 @@ func (r *Raft) handleVoteResponse(msg *rpb.Response) {
 		log.Printf("[DEBU] raft: converting to leading, received %d votes", r.voteCount)
 		// majority agree
 		r.state = Leader
+		r.leaderID = r.ID
 		r.votedFor = 0
 		r.voteCount = 0
 		r.sendHeartbeats()
@@ -422,14 +439,17 @@ func (r *Raft) runAsCandidate() {
 	case req := <-r.addEntries:
 		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
 		r.currentTerm = msg.Msg.Term // todo: need to check term greater than here?
 		r.state = Follower
 		r.respondToAppendEntriesAsFollower(msg)
-	case <-r.appendEntriesRes:
-		log.Printf("[WARN] raft: received unexpected response to append entries")
+	case res := <-r.appendEntriesRes:
+		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.state.Name(), res.SenderID)
 	case msg := <-r.voteReq:
+		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.state.Name(), msg.Msg.CandidateID)
 		r.respondToVoteRequest(msg)
 	case msg := <-r.voteRes:
+		log.Printf("[DEBU] raft: %s receive vote response for %d", r.state.Name(), msg.SenderID)
 		r.handleVoteResponse(msg)
 	case <-time.After(jitter(CandidateTimeout)):
 		r.toCandidate()
@@ -437,17 +457,18 @@ func (r *Raft) runAsCandidate() {
 }
 
 func (r *Raft) run() {
-	for {
-		if r.BootstrapExpect == 0 && r.service.NodeCount() > 1 {
-			break
-		}
+	if r.BootstrapExpect == 0 {
+		r.BootstrapExpect = 2
+	}
 
-		if r.BootstrapExpect == r.service.NodeCount() {
+	for {
+		nCount := r.service.NodeCount()
+		if r.BootstrapExpect == nCount {
 			log.Printf("[INF0] raft: met bootstrap count of %d", r.BootstrapExpect)
 			break
 		}
 
-		log.Printf("[INF0] raft: node count is 1, waiting for more nodes...")
+		log.Printf("[INF0] raft: node count is %d, waiting for %d", nCount, r.BootstrapExpect)
 		time.Sleep(5 * time.Second)
 	}
 
