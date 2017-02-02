@@ -51,6 +51,7 @@ func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 		matchIdx: map[uint64]uint64{},
 		lastSentIdx: map[uint64]uint64{},
 		addEntries: make(chan *addEntryFuture, 10),
+		commitIdxEvents: newIdxEvents(),
 	}
 	r.configure()
 	return r
@@ -87,6 +88,7 @@ type Raft struct {
 	voteRes chan *rpb.Response
 
 	addEntries chan *addEntryFuture
+	commitIdxEvents *idxEvents
 }
 
 type addEntryFuture struct {
@@ -99,19 +101,29 @@ type addEntryResponse struct {
 	err error
 }
 
-func (r *Raft) AddEntry(cmd []byte) error {
+func (r *Raft) AddEntry(cmd []byte) (uint64, error) {
 	c := make(chan *addEntryResponse, 2)
 	r.addEntries <- &addEntryFuture{cmd, c}
 	res := <- c
 
 	if res.err != nil {
 		log.Printf("[WARN] raft: add entry fail %v", res.err)
-		return res.err
+		return 0, res.err
 	}
 
 	log.Printf("[DEBU] raft: added entry, idx: %d", res.idx)
-	// todo: wait for commit index
-	return nil
+	sub := make(chan uint64)
+	unsubscribe := r.commitIdxEvents.subscribe(sub)
+	defer unsubscribe()
+
+	for idx := range sub {
+		if idx >= res.idx {
+			return res.idx, nil
+		}
+	}
+
+	panic("Subscription closed early")
+	return 0, nil
 }
 
 func (r *Raft) configure() {
@@ -186,7 +198,12 @@ func (r *Raft) respondToAppendEntriesAsFollower(msg *rs.AppendEntriesFuture) {
 			return
 		}
 		r.lastAppliedIdx = lastIdx
-		r.commitIdx = min(r.lastAppliedIdx, msg.Msg.LeaderCommitIdx)
+
+		n := min(r.lastAppliedIdx, msg.Msg.LeaderCommitIdx)
+		if n > r.commitIdx {
+			r.commitIdx = n
+			r.commitIdxEvents.publish(n)
+		}
 	}
 	msg.Response <- r.response()
 }
@@ -254,12 +271,14 @@ func (r *Raft) sendLogEntries() {
 
 		nextIdx := r.nextIdx[n.ID]
 		if r.lastAppliedIdx <= nextIdx {
+			r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, r.appendEntriesMsg(nil)}
 			continue
 		}
 
 		lastSentIdx, entries, err := r.logStore.GetFrom(nextIdx, MaxEntriesPerMessage)
 		if err != nil {
 			log.Printf("[ERRO] raft: could not get log entries: %v", err)
+			r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, r.appendEntriesMsg(nil)}
 			continue
 		}
 
@@ -267,10 +286,7 @@ func (r *Raft) sendLogEntries() {
 
 		log.Printf("[DEBU] raft: send entries to: %d", n.ID)
 		msg := r.appendEntriesMsg(entries)
-		r.sendAppendEntries <- &rs.SendAppendEntries{
-			ID: n.ID,
-			Msg: msg,
-		}
+		r.sendAppendEntries <- &rs.SendAppendEntries{n.ID, false, msg}
 	}
 }
 
@@ -319,7 +335,10 @@ func (r *Raft) checkCommitIdx() {
 		n += 1
 	}
 
-	r.commitIdx = n
+	if n > r.commitIdx {
+		r.commitIdx = n
+		r.commitIdxEvents.publish(n)
+	}
 }
 
 func (r *Raft) applyLogEntry(req *addEntryFuture) {
@@ -359,8 +378,8 @@ func (r *Raft) runAsLeader() {
 	case <-r.voteRes:
 		log.Println("[WARN] raft: received unexpected response to vote")
 	case <-time.After(jitter(LeaderTimeout)):
-		// r.sendLogEntries()
-		r.sendHeartbeats()
+		log.Printf("[INFO] raft: sending log entries")
+		 r.sendLogEntries()
 	}
 }
 

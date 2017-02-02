@@ -203,7 +203,7 @@ func TestRaft_RunAsFollowerElectionTimeout(t *testing.T) {
 func TestRaft_Election(t *testing.T) {
 	setupTestRaft()
 
-	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3004"}
+	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3003"}
 	service.Nodes[3] = &rpb.Node{2, "127.0.0.1:3004"}
 
 	testRaft.runAsFollower()
@@ -221,8 +221,35 @@ func TestRaft_Election(t *testing.T) {
 func TestRaft_ApplyEntry(t *testing.T) {
 	setupTestRaft()
 
+	go testRaft.runAsLeader()
+
 	c := make(chan *addEntryResponse, 2)
-	testRaft.addEntries <- &addEntryFuture{cmd, c}
+	testRaft.addEntries <- &addEntryFuture{[]byte("test"), c}
 	res := <- c
 
+	assert.Equal(t, uint64(1), res.idx)
+	assert.Equal(t, uint64(1), testRaft.lastAppliedIdx)
+	assert.Nil(t, res.err)
+}
+
+func TestRaft_ApplyEntryFull(t *testing.T) {
+	setupTestRaft()
+	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3002"}
+	service.Nodes[3] = &rpb.Node{3, "127.0.0.1:3003"}
+
+	go func() {
+		for {
+			testRaft.runAsLeader()
+		}
+	}()
+
+	go func() {
+		for msg := range testRaft.sendAppendEntries {
+			println("respond to", msg.ID)
+			testRaft.appendEntriesRes <- &rpb.Response{SenderID: msg.ID, Accepted: true}
+		}
+	}()
+
+	_, err := testRaft.AddEntry([]byte("test"))
+	assert.Nil(t, err)
 }
