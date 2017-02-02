@@ -16,6 +16,7 @@ var (
 	listenF    = flag.String("listen", ":3001", "Address to listen on")
 	advertiseF = flag.String("advertise", "127.0.0.1:3001", "Address of this node")
 	joinToF    = flag.String("join-to", "", "Address of a node to join")
+	bootstrapF = flag.Int("bootstrap", 2, "Boostrap expect")
 	idF        = flag.Int64("id", 1, "Node ID")
 )
 
@@ -44,7 +45,7 @@ func main() {
 	logStore = store.NewInMem()
 
 	r := raft.New(id, service, logStore)
-	r.BootstrapExpect = 3
+	r.BootstrapExpect = *bootstrapF
 
 	go r.Start()
 	go raft.DebugServer(r, "")

@@ -28,6 +28,14 @@ func raftInfo(r *Raft) map[string]interface{} {
 	info["entries"] = entries
 	info["nodes"] = r.service.ListNodes()
 	info["goroutines"] = runtime.NumGoroutine()
+	info["serviceChannels"] = map[string]int{
+		"sendAppendEntries": len(r.sendAppendEntries),
+		"appendEntriesReq": len(r.appendEntriesReq),
+		"appendEntriesRes": len(r.appendEntriesRes),
+		"sendVote": len(r.sendVoteReq),
+		"voteReq": len(r.voteReq),
+		"voteRes": len(r.voteRes),
+	}
 
 	return info
 }

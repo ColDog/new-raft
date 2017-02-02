@@ -207,7 +207,6 @@ func (r *Raft) respondToAppendEntriesAsFollower(msg *rs.AppendEntriesFuture) {
 }
 
 func (r *Raft) respondToVoteRequest(msg *rs.VoteRequestFuture) {
-	log.Printf("[DEBU] received vote request %+v\n", msg.Msg)
 	if msg.Msg.Term < r.currentTerm {
 		msg.Response <- r.errResponse(ErrLowerTerm)
 		return
@@ -228,7 +227,7 @@ func (r *Raft) runAsFollower() {
 	case req := <-r.addEntries:
 		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
-		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d: %+v", r.state.Name(), msg.Msg.SenderID, msg.Msg)
 		r.respondToAppendEntriesAsFollower(msg)
 	case msg := <-r.voteReq:
 		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.state.Name(), msg.Msg.CandidateID)
@@ -314,8 +313,7 @@ func (r *Raft) handleAppendEntriesRes(msg *rpb.Response) {
 	r.checkCommitIdx()
 }
 
-// • If there exists an N such that N > commitIndex, a majority
-// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+// • If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 // set commitIndex = N (§5.3, §5.4).
 func (r *Raft) checkCommitIdx() {
 	n := r.commitIdx + 1
@@ -376,6 +374,7 @@ func (r *Raft) runAsLeader() {
 	select {
 	case req := <-r.addEntries:
 		r.applyLogEntry(req)
+		r.sendLogEntries()
 	case msg := <-r.appendEntriesReq:
 		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
 		if msg.Msg.Term >= r.currentTerm {
@@ -393,7 +392,7 @@ func (r *Raft) runAsLeader() {
 	case res := <-r.voteRes:
 		log.Printf("[DEBU] raft: %s receive vote response from %d", r.state.Name(), res.SenderID)
 	case <-time.After(jitter(LeaderTimeout)):
-		r.sendLogEntries()
+		r.sendHeartbeats()
 	}
 }
 
