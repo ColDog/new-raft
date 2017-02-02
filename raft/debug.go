@@ -1,10 +1,10 @@
 package raft
 
 import (
-	"net/http"
-	"runtime"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"runtime"
 )
 
 func raftInfo(r *Raft) map[string]interface{} {
@@ -34,7 +34,7 @@ func raftInfo(r *Raft) map[string]interface{} {
 
 func DebugServer(raft *Raft, listen string) {
 	if listen == "" {
-		listen = fmt.Sprintf(":%d", 8000 + int(raft.ID))
+		listen = fmt.Sprintf(":%d", 8000+int(raft.ID))
 	}
 
 	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {

@@ -1,16 +1,16 @@
 package raftservice
 
 import (
-	"github.com/coldog/raft/rpb"
 	"errors"
+	"github.com/coldog/raft/rpb"
 )
 
 var ErrNoNode = errors.New("no node")
 
 type Config struct {
-	ID uint64
-	Listen string
-	Advertise string
+	ID         uint64
+	Listen     string
+	Advertise  string
 	JoinOnBoot []string
 }
 
@@ -31,23 +31,23 @@ type RaftService interface {
 }
 
 type SendAppendEntries struct {
-	ID uint64
+	ID        uint64
 	Broadcast bool
-	Msg *rpb.AppendRequest
+	Msg       *rpb.AppendRequest
 }
 
 type SendVoteRequest struct {
-	ID uint64
+	ID        uint64
 	Broadcast bool
-	Msg *rpb.VoteRequest
+	Msg       *rpb.VoteRequest
 }
 
 type AppendEntriesFuture struct {
-	Msg *rpb.AppendRequest
+	Msg      *rpb.AppendRequest
 	Response chan *rpb.Response
 }
 
 type VoteRequestFuture struct {
-	Msg *rpb.VoteRequest
+	Msg      *rpb.VoteRequest
 	Response chan *rpb.Response
 }

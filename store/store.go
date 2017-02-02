@@ -1,9 +1,9 @@
 package store
 
 import (
-	"sync"
 	"errors"
 	"github.com/coldog/raft/rpb"
+	"sync"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -18,13 +18,13 @@ type Store interface {
 func NewInMem() *InMemStore {
 	return &InMemStore{
 		entries: make(map[uint64]*rpb.Entry),
-		lock: &sync.RWMutex{},
+		lock:    &sync.RWMutex{},
 	}
 }
 
 type InMemStore struct {
 	entries map[uint64]*rpb.Entry
-	lock *sync.RWMutex
+	lock    *sync.RWMutex
 }
 
 func (s *InMemStore) Add(entries ...*rpb.Entry) (uint64, error) {

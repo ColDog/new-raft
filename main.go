@@ -2,21 +2,21 @@ package main
 
 import (
 	"github.com/coldog/raft/raft"
-	"github.com/coldog/raft/store"
 	"github.com/coldog/raft/raftservice"
+	"github.com/coldog/raft/store"
 	"github.com/hashicorp/logutils"
 
-	"log"
 	"flag"
-	"strings"
+	"log"
 	"os"
+	"strings"
 )
 
 var (
-	listenF = flag.String("listen", ":3001", "Address to listen on")
+	listenF    = flag.String("listen", ":3001", "Address to listen on")
 	advertiseF = flag.String("advertise", "127.0.0.1:3001", "Address of this node")
-	joinToF = flag.String("join-to", "", "Address of a node to join")
-	idF = flag.Int64("id", 1, "Node ID")
+	joinToF    = flag.String("join-to", "", "Address of a node to join")
+	idF        = flag.Int64("id", 1, "Node ID")
 )
 
 func main() {
@@ -27,17 +27,17 @@ func main() {
 	var logStore store.Store
 
 	filter := &logutils.LevelFilter{
-		Levels: []logutils.LogLevel{"DEBU", "WARN", "ERRO"},
+		Levels:   []logutils.LogLevel{"DEBU", "WARN", "ERRO"},
 		MinLevel: logutils.LogLevel("DEBU"),
-		Writer: os.Stderr,
+		Writer:   os.Stderr,
 	}
 	log.SetOutput(filter)
 
 	service = &raftservice.RaftGRPCService{}
 	service.Configure(&raftservice.Config{
-		ID: id,
-		Advertise: *advertiseF,
-		Listen: *listenF,
+		ID:         id,
+		Advertise:  *advertiseF,
+		Listen:     *listenF,
 		JoinOnBoot: strings.Split(*joinToF, ","),
 	})
 

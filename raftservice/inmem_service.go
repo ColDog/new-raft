@@ -1,26 +1,26 @@
 package raftservice
 
 import (
-	"sync"
 	"github.com/coldog/raft/rpb"
 	"math/rand"
+	"sync"
 )
 
 type RaftMockService struct {
-	id uint64
-	addr string
-	Nodes map[uint64]*rpb.Node
-	lock  *sync.RWMutex
-	listen string
+	id         uint64
+	addr       string
+	Nodes      map[uint64]*rpb.Node
+	lock       *sync.RWMutex
+	listen     string
 	joinOnBoot []string
 
 	sendAppendEntries chan *SendAppendEntries
-	appendEntriesReq chan *AppendEntriesFuture
-	appendEntriesRes chan *rpb.Response
+	appendEntriesReq  chan *AppendEntriesFuture
+	appendEntriesRes  chan *rpb.Response
 
 	sendVoteReq chan *SendVoteRequest
-	voteReq chan *VoteRequestFuture
-	voteRes chan *rpb.Response
+	voteReq     chan *VoteRequestFuture
+	voteRes     chan *rpb.Response
 }
 
 func (s *RaftMockService) Start() error {

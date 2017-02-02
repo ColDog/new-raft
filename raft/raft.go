@@ -1,33 +1,33 @@
 package raft
 
 import (
-	"github.com/coldog/raft/store"
+	"errors"
 	rs "github.com/coldog/raft/raftservice"
 	"github.com/coldog/raft/rpb"
-	"time"
-	"errors"
+	"github.com/coldog/raft/store"
 	"log"
 	"math/rand"
+	"time"
 )
 
 var (
-	ErrLowerTerm = errors.New("lower term")
+	ErrLowerTerm          = errors.New("lower term")
 	ErrVoteConditionsFail = errors.New("cannot grant vote")
-	ErrTermNotMatch = errors.New("terms do not match at the provided index")
-	ErrNotLeader = errors.New("not the leader")
+	ErrTermNotMatch       = errors.New("terms do not match at the provided index")
+	ErrNotLeader          = errors.New("not the leader")
 )
 
 const (
-	FollowerTimeout = 3 * time.Second
-	LeaderTimeout = 2 * time.Second
-	CandidateTimeout = 6 * time.Second
+	FollowerTimeout      = 3 * time.Second
+	LeaderTimeout        = 2 * time.Second
+	CandidateTimeout     = 6 * time.Second
 	MaxEntriesPerMessage = 10
 )
 
 var stateNames = map[State]string{
 	Candidate: "CANDIDATE",
-	Follower: "FOLLOWER",
-	Leader: "LEADER",
+	Follower:  "FOLLOWER",
+	Leader:    "LEADER",
 }
 
 type State int
@@ -44,13 +44,13 @@ const (
 
 func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 	r := &Raft{
-		ID: id,
-		service: srvc,
-		logStore: store,
-		nextIdx: map[uint64]uint64{},
-		matchIdx: map[uint64]uint64{},
-		lastSentIdx: map[uint64]uint64{},
-		addEntries: make(chan *addEntryFuture, 10),
+		ID:              id,
+		service:         srvc,
+		logStore:        store,
+		nextIdx:         map[uint64]uint64{},
+		matchIdx:        map[uint64]uint64{},
+		lastSentIdx:     map[uint64]uint64{},
+		addEntries:      make(chan *addEntryFuture, 10),
 		commitIdxEvents: newIdxEvents(),
 	}
 	r.configure()
@@ -58,41 +58,39 @@ func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 }
 
 type Raft struct {
-	ID uint64
+	ID              uint64
 	BootstrapExpect int
 
 	state State
 
-	leaderID uint64
+	leaderID    uint64
 	currentTerm uint64
-	votedFor uint64
-	voteCount int
-	logStore store.Store
+	votedFor    uint64
+	voteCount   int
+	logStore    store.Store
 
-	commitIdx uint64
-	lastAppliedIdx uint64
+	commitIdx       uint64
+	lastAppliedIdx  uint64
 	lastAppliedTerm uint64
 
-	nextIdx map[uint64]uint64
-	matchIdx map[uint64]uint64
+	nextIdx     map[uint64]uint64
+	matchIdx    map[uint64]uint64
 	lastSentIdx map[uint64]uint64
 
-	service rs.RaftService
-
+	service           rs.RaftService
 	sendAppendEntries chan *rs.SendAppendEntries
-	appendEntriesReq chan *rs.AppendEntriesFuture
-	appendEntriesRes chan *rpb.Response
+	appendEntriesReq  chan *rs.AppendEntriesFuture
+	appendEntriesRes  chan *rpb.Response
+	sendVoteReq       chan *rs.SendVoteRequest
+	voteReq           chan *rs.VoteRequestFuture
+	voteRes           chan *rpb.Response
 
-	sendVoteReq chan *rs.SendVoteRequest
-	voteReq chan *rs.VoteRequestFuture
-	voteRes chan *rpb.Response
-
-	addEntries chan *addEntryFuture
+	addEntries      chan *addEntryFuture
 	commitIdxEvents *idxEvents
 }
 
 type addEntryFuture struct {
-	command []byte
+	command  []byte
 	response chan *addEntryResponse
 }
 
@@ -104,7 +102,7 @@ type addEntryResponse struct {
 func (r *Raft) AddEntry(cmd []byte) (uint64, error) {
 	c := make(chan *addEntryResponse, 2)
 	r.addEntries <- &addEntryFuture{cmd, c}
-	res := <- c
+	res := <-c
 
 	if res.err != nil {
 		log.Printf("[WARN] raft: add entry fail %v", res.err)
@@ -137,19 +135,19 @@ func (r *Raft) configure() {
 
 func (r *Raft) errResponse(err error) *rpb.Response {
 	return &rpb.Response{
-		Accepted: false,
-		Error: err.Error(),
-		SenderID: r.ID,
-		LeaderID: r.leaderID,
+		Accepted:       false,
+		Error:          err.Error(),
+		SenderID:       r.ID,
+		LeaderID:       r.leaderID,
 		LastAppliedIdx: r.lastAppliedIdx,
 	}
 }
 
 func (r *Raft) response() *rpb.Response {
 	return &rpb.Response{
-		Accepted: true,
-		SenderID: r.ID,
-		LeaderID: r.leaderID,
+		Accepted:       true,
+		SenderID:       r.ID,
+		LeaderID:       r.leaderID,
 		LastAppliedIdx: r.lastAppliedIdx,
 	}
 }
@@ -247,9 +245,9 @@ func (r *Raft) runAsFollower() {
 
 func (r *Raft) appendEntriesMsg() *rpb.AppendRequest {
 	return &rpb.AppendRequest{
-		SenderID: r.ID,
-		Term: r.currentTerm,
-		LeaderID: r.leaderID,
+		SenderID:        r.ID,
+		Term:            r.currentTerm,
+		LeaderID:        r.leaderID,
 		LeaderCommitIdx: r.commitIdx,
 	}
 }
@@ -258,7 +256,7 @@ func (r *Raft) sendHeartbeats() {
 	msg := r.appendEntriesMsg()
 	r.sendAppendEntries <- &rs.SendAppendEntries{
 		Broadcast: true,
-		Msg: msg,
+		Msg:       msg,
 	}
 }
 
@@ -329,7 +327,7 @@ func (r *Raft) checkCommitIdx() {
 				matchCount++
 			}
 		}
-		if matchCount < r.service.NodeCount() / 2 {
+		if matchCount < r.service.NodeCount()/2 {
 			n--
 			break
 		}
@@ -358,8 +356,8 @@ func (r *Raft) applyLogEntry(req *addEntryFuture) {
 	nextIdx := r.lastAppliedIdx + 1
 	e := &rpb.Entry{
 		Command: req.command,
-		Term: r.currentTerm,
-		Idx: nextIdx,
+		Term:    r.currentTerm,
+		Idx:     nextIdx,
 	}
 
 	_, err := r.logStore.Add(e)
@@ -395,7 +393,7 @@ func (r *Raft) runAsLeader() {
 	case res := <-r.voteRes:
 		log.Printf("[DEBU] raft: %s receive vote response from %d", r.state.Name(), res.SenderID)
 	case <-time.After(jitter(LeaderTimeout)):
-		 r.sendLogEntries()
+		r.sendLogEntries()
 	}
 }
 
@@ -403,13 +401,13 @@ func (r *Raft) sendVoteRequests() {
 	log.Printf("[DEBU] raft: requesting votes")
 	msg := &rpb.VoteRequest{
 		CandidateID: r.ID,
-		Term: r.currentTerm,
-		LastLogIdx: r.lastAppliedIdx,
+		Term:        r.currentTerm,
+		LastLogIdx:  r.lastAppliedIdx,
 		LastLogTerm: r.lastAppliedTerm,
 	}
 	r.sendVoteReq <- &rs.SendVoteRequest{
 		Broadcast: true,
-		Msg: msg,
+		Msg:       msg,
 	}
 }
 
@@ -423,7 +421,7 @@ func (r *Raft) handleVoteResponse(msg *rpb.Response) {
 	if msg.Accepted {
 		r.voteCount += 1
 	}
-	if (r.voteCount + 1) > r.service.NodeCount() / 2 {
+	if (r.voteCount + 1) > r.service.NodeCount()/2 {
 		log.Printf("[DEBU] raft: converting to leading, received %d votes", r.voteCount)
 		// majority agree
 		r.state = Leader
@@ -505,5 +503,5 @@ func min(args ...uint64) (m uint64) {
 }
 
 func jitter(t time.Duration) time.Duration {
-	return time.Duration((rand.Float64() * 0.5) * float64(t) + float64(t / 2))
+	return time.Duration((rand.Float64()*0.5)*float64(t) + float64(t/2))
 }

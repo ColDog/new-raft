@@ -1,23 +1,23 @@
 package raft
 
 import (
+	"log"
 	"sync"
 	"time"
-	"log"
 )
 
 func newIdxEvents() *idxEvents {
 	return &idxEvents{
 		subs: make(map[uint]chan uint64),
 		lock: &sync.Mutex{},
-		id: 1,
+		id:   1,
 	}
 }
 
 type idxEvents struct {
 	subs map[uint]chan uint64
 	lock *sync.Mutex
-	id uint
+	id   uint
 }
 
 func (p *idxEvents) subscribe(sub chan uint64) func() {

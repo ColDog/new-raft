@@ -1,17 +1,17 @@
 package raftservice
 
 import (
-	"golang.org/x/net/context"
 	"github.com/coldog/raft/rpb"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
-	"sync"
 	"log"
-	"time"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
-	"math/rand"
+	"sync"
+	"time"
 )
 
 const (
@@ -26,7 +26,7 @@ const chanBuffer = 100
 
 type RaftGRPCNode struct {
 	*rpb.Node
-	conn *grpc.ClientConn
+	conn   *grpc.ClientConn
 	client rpb.RaftClient
 }
 
@@ -42,20 +42,20 @@ func (n *RaftGRPCNode) connect() error {
 }
 
 type RaftGRPCService struct {
-	ID uint64
-	Addr string
-	Nodes map[uint64]*RaftGRPCNode
-	lock  *sync.RWMutex
-	listen string
+	ID         uint64
+	Addr       string
+	Nodes      map[uint64]*RaftGRPCNode
+	lock       *sync.RWMutex
+	listen     string
 	joinOnBoot []string
 
 	sendAppendEntries chan *SendAppendEntries
-	appendEntriesReq chan *AppendEntriesFuture
-	appendEntriesRes chan *rpb.Response
+	appendEntriesReq  chan *AppendEntriesFuture
+	appendEntriesRes  chan *rpb.Response
 
 	sendVoteReq chan *SendVoteRequest
-	voteReq chan *VoteRequestFuture
-	voteRes chan *rpb.Response
+	voteReq     chan *VoteRequestFuture
+	voteRes     chan *rpb.Response
 }
 
 func (s *RaftGRPCService) Configure(c *Config) {
@@ -143,14 +143,14 @@ func (s *RaftGRPCService) NodeCount() int {
 func (s *RaftGRPCService) AppendEntries(ctx context.Context, req *rpb.AppendRequest) (*rpb.Response, error) {
 	resCh := make(chan *rpb.Response, 2)
 	s.appendEntriesReq <- &AppendEntriesFuture{req, resCh}
-	res := <- resCh
+	res := <-resCh
 	return res, nil
 }
 
 func (s *RaftGRPCService) RequestVote(ctx context.Context, req *rpb.VoteRequest) (*rpb.Response, error) {
 	resCh := make(chan *rpb.Response, 2)
 	s.voteReq <- &VoteRequestFuture{req, resCh}
-	res := <- resCh
+	res := <-resCh
 	return res, nil
 }
 
@@ -163,7 +163,7 @@ func (s *RaftGRPCService) JoinTo(addr string) error {
 
 	client := rpb.NewRaftClient(conn)
 	nodes, err := client.Join(context.Background(), &rpb.Node{
-		ID: s.ID,
+		ID:   s.ID,
 		Addr: addr,
 	})
 	log.Printf("[DEBU] service: join to received response %s: %+v", addr, nodes)
@@ -212,7 +212,7 @@ func (s *RaftGRPCService) Join(ctx context.Context, req *rpb.Node) (*rpb.Nodes, 
 	s.syncNode(req)
 	res := &rpb.Nodes{
 		SenderID: s.ID,
-		Nodes: s.nodeList(),
+		Nodes:    s.nodeList(),
 	}
 	return res, nil
 }
@@ -222,7 +222,7 @@ func (s *RaftGRPCService) LeaveCluster() {
 	defer s.lock.RUnlock()
 
 	msg := &rpb.Node{
-		ID: s.ID,
+		ID:   s.ID,
 		Addr: s.Addr,
 	}
 
@@ -247,7 +247,7 @@ func (s *RaftGRPCService) ClusterState(ctx context.Context, req *rpb.Nodes) (*rp
 	s.syncNodesL(req.Nodes)
 	res := &rpb.Nodes{
 		SenderID: s.ID,
-		Nodes: s.nodeList(),
+		Nodes:    s.nodeList(),
 	}
 	return res, nil
 }
@@ -311,7 +311,7 @@ func (s *RaftGRPCService) run() {
 	for {
 		var err error
 		select {
-		case msg := <- s.sendAppendEntries:
+		case msg := <-s.sendAppendEntries:
 			if msg.Broadcast {
 				s.broadcast(s.deliverAppendEntries(msg.Msg))
 			} else {
@@ -345,7 +345,9 @@ func (s *RaftGRPCService) randNodeID() uint64 {
 }
 
 func (s *RaftGRPCService) syncNode(n *rpb.Node) {
-	if n.ID == s.ID { return }
+	if n.ID == s.ID {
+		return
+	}
 
 	s.lock.RLock()
 	_, ok := s.Nodes[n.ID]
@@ -361,7 +363,9 @@ func (s *RaftGRPCService) syncNode(n *rpb.Node) {
 }
 
 func (s *RaftGRPCService) removeNode(id uint64) {
-	if id == s.ID { return }
+	if id == s.ID {
+		return
+	}
 
 	s.lock.RLock()
 	node, ok := s.Nodes[id]
@@ -383,7 +387,9 @@ func (s *RaftGRPCService) syncNodesL(nodes []*rpb.Node) {
 
 func (s *RaftGRPCService) syncNodes(nodes []*rpb.Node) {
 	for _, n := range nodes {
-		if n.ID == s.ID { continue }
+		if n.ID == s.ID {
+			continue
+		}
 
 		if _, ok := s.Nodes[n.ID]; !ok {
 			node := &RaftGRPCNode{Node: n}
@@ -455,7 +461,7 @@ func (s *RaftGRPCService) catchInterrupt() {
 	signal.Notify(c, os.Interrupt)
 	signal.Notify(c, os.Kill)
 
-	go func(){
+	go func() {
 		<-c
 		go func() {
 			time.Sleep(10 * time.Second)
