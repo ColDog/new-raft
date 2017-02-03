@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 var (
@@ -49,6 +50,22 @@ func main() {
 
 	go r.Start()
 	go raft.DebugServer(r, "")
+
+	go func() {
+		for {
+			time.Sleep(100 * time.Millisecond)
+			if r.State != raft.Leader {
+				continue
+			}
+
+			println(">>> adding entry....")
+			idx, err := r.AddEntry([]byte("test"))
+			if err != nil {
+				log.Fatal(err)
+			}
+			println(">>> entry added", idx)
+		}
+	}()
 
 	log.Fatal(service.Start())
 }

@@ -50,10 +50,14 @@ func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 		nextIdx:         map[uint64]uint64{},
 		matchIdx:        map[uint64]uint64{},
 		lastSentIdx:     map[uint64]uint64{},
-		addEntries:      make(chan *addEntryFuture, 10),
+		addEntries:      make(chan *addEntryFuture, 100),
 		commitIdxEvents: newIdxEvents(),
-		timeoutInterrupt: make(chan struct{}),
-		timeoutReached:   make(chan struct{}),
+		timeoutInterrupt:  make(chan struct{}, 10),
+		timeoutReached:    make(chan struct{}),
+		triggerLogEntries: make(chan struct{}, 50),
+		changeToLeader:    make(chan struct{}, 2),
+		exitLeader:        make(chan struct{}, 2),
+		quit:              make(chan struct{}),
 	}
 	r.configure()
 	return r
@@ -89,6 +93,12 @@ type Raft struct {
 
 	timeoutInterrupt  chan struct{}
 	timeoutReached    chan struct{}
+
+	triggerLogEntries chan struct{}
+	changeToLeader    chan struct{}
+	exitLeader        chan struct{}
+
+	quit chan struct{}
 
 	addEntries      chan *addEntryFuture
 	commitIdxEvents *idxEvents
@@ -244,6 +254,8 @@ func (r *Raft) runAsFollower() {
 	case <-r.timeoutReached:
 		log.Printf("[DEBU] raft: %s follower timeout, converting to candidate", r.State.Name())
 		r.toCandidate()
+	case <-r.quit:
+		return
 	}
 }
 
@@ -379,8 +391,7 @@ func (r *Raft) runAsLeader() {
 	select {
 	case req := <-r.addEntries:
 		r.applyLogEntry(req)
-		r.sendLogEntries()
-		r.timeoutInterrupt <- struct{}{}
+		r.triggerLogEntries <- struct{}{}
 	case msg := <-r.appendEntriesReq:
 		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.State.Name(), msg.Msg.SenderID)
 		if msg.Msg.Term >= r.currentTerm {
@@ -398,7 +409,9 @@ func (r *Raft) runAsLeader() {
 	case res := <-r.voteRes:
 		log.Printf("[DEBU] raft: %s receive vote response from %d", r.State.Name(), res.SenderID)
 	case <-r.timeoutReached:
-		r.sendHeartbeats()
+		r.triggerLogEntries <- struct{}{}
+	case <-r.quit:
+		return
 	}
 }
 
@@ -456,6 +469,8 @@ func (r *Raft) runAsCandidate() {
 		r.handleVoteResponse(msg)
 	case <-r.timeoutReached:
 		r.toCandidate()
+	case <-r.quit:
+		return
 	}
 }
 
@@ -478,6 +493,8 @@ func (r *Raft) run() {
 	log.Printf("[INFO] raft: starting...")
 
 	go r.runTimer()
+	go r.runLogEntrySender()
+
 	r.runMain()
 }
 
@@ -496,6 +513,14 @@ func (r *Raft) runMain() {
 		r.timeoutInterrupt <- struct{}{}
 		if r.State != prevState {
 			log.Printf("[INFO] raft: changed to State %s", r.State.Name())
+
+			if prevState == Leader {
+				r.exitLeader <- struct{}{}
+			}
+
+			if r.State == Leader {
+				r.changeToLeader <- struct{}{}
+			}
 		}
 	}
 }
@@ -517,6 +542,25 @@ func (r *Raft) runTimer() {
 			break
 		case <-time.After(jitter(timeout)):
 			r.timeoutReached <- struct{}{}
+		case <-r.quit:
+			return
+		}
+	}
+}
+
+func (r *Raft) runLogEntrySender() {
+	for range r.changeToLeader {
+		LEADER_LOOP:
+		for {
+			select {
+			case <-r.triggerLogEntries:
+				// send out the log entries
+				r.sendLogEntries()
+			case <-r.exitLeader:
+				break LEADER_LOOP
+			case <-r.quit:
+				return
+			}
 		}
 	}
 }
@@ -524,6 +568,10 @@ func (r *Raft) runTimer() {
 func (r *Raft) Start() {
 	r.configure()
 	r.run()
+}
+
+func (r *Raft) Stop() {
+	close(r.quit)
 }
 
 func min(args ...uint64) (m uint64) {

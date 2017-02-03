@@ -248,6 +248,8 @@ func TestRaft_ApplyEntryFull(t *testing.T) {
 		}
 	}()
 
+	go testRaft.runLogEntrySender()
+
 	go func() {
 		for {
 			testRaft.runAsLeader()

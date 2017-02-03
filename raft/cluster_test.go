@@ -38,13 +38,14 @@ var cluster map[uint64]*clusterNode = map[uint64]*clusterNode{}
 
 func testCluster(count int) {
 	for i := 1; i < count + 1; i++ {
-		clusterIds = append(clusterIds, uint64(i))
-		node := testNode(uint64(i))
+		id := uint64(i)
+		clusterIds = append(clusterIds, id)
+		node := testNode(id)
 		node.raft.BootstrapExpect = count
 
 		go readAppendEntries(node)
 		go readVoteRequests(node)
-		cluster[uint64(i)] = node
+		cluster[id] = node
 	}
 
 	// add each node manually
@@ -83,11 +84,11 @@ func readAppendEntries(n *clusterNode)  {
 			res := make(chan *rpb.Response, 2)
 
 			// in a new thread, read back the message from the target node and send it to the node that requested it
-			go func() {
+			go func(id uint64, res chan *rpb.Response) {
 				r := <-res
 				fmt.Printf(">>> %d <- %d appendEntries response %+v\n", n.raft.ID, id, r)
 				n.srvc.AppendEntriesResChan() <- r
-			}()
+			}(id, res)
 
 			fmt.Printf(">>> %d -> %d appendEntries %+v\n", n.raft.ID, id, msg.Msg)
 
@@ -118,11 +119,11 @@ func readVoteRequests(n *clusterNode)  {
 			res := make(chan *rpb.Response, 2)
 
 			// in a new thread, read back the message from the target node and send it to the node that requested it
-			go func() {
+			go func(id uint64, res chan *rpb.Response) {
 				r := <-res
 				fmt.Printf(">>> %d <- %d voteRequest response %+v\n", n.raft.ID, id, r)
 				n.srvc.VoteRequestResChan() <- r
-			}()
+			}(id, res)
 
 			fmt.Printf(">>> %d -> %d voteRequest %+v\n", n.raft.ID, id, msg.Msg)
 
@@ -135,7 +136,7 @@ func readVoteRequests(n *clusterNode)  {
 	}
 }
 
-func TestRaftCluster_BootstrapWithin5Seconds(t *testing.T) {
+func TestCluster_BootstrapWithin5Seconds(t *testing.T) {
 	testCluster(2)
 	time.Sleep(5 * time.Second)
 
@@ -147,29 +148,34 @@ func TestRaftCluster_BootstrapWithin5Seconds(t *testing.T) {
 	}
 }
 
-func TestRaftCluster_AddEntry(t *testing.T) {
+func TestCluster_AddEntry(t *testing.T) {
 	testCluster(3)
+
+	println("sleeping!!!")
 	time.Sleep(5 * time.Second)
 
 	var leader *Raft
-	for _, node := range cluster {
-		if node.raft.State == Leader {
-			leader = node.raft
+	for _, id := range clusterIds {
+		if cluster[id].raft.State == Leader {
+			leader = cluster[id].raft
 			break
 		}
 	}
 
-	for i := 0; i < 2; i++ {
-		leader.AddEntry([]byte("test"))
+
+	if assert.NotNil(t, leader) {
+		for i := 0; i < 15; i++ {
+			leader.AddEntry([]byte("test"))
+		}
 	}
 
-	time.Sleep(2 * time.Second)
-	for _, node := range cluster {
-		assert.Equal(t, uint64(2), node.raft.commitIdx)
-	}
+	//time.Sleep(2 * time.Second)
+	//for _, node := range cluster {
+	//	assert.Equal(t, uint64(2), node.raft.commitIdx)
+	//}
 }
 
-func TestRaftCluster_VerifyLogs(t *testing.T) {
+func TestCluster_VerifyLogs(t *testing.T) {
 	testCluster(2)
 	time.Sleep(5 * time.Second)
 
@@ -188,4 +194,3 @@ func TestRaftCluster_VerifyLogs(t *testing.T) {
 	assert.Equal(t, uint64(20), cluster[1].raft.commitIdx)
 	assert.Equal(t, uint64(20), cluster[2].raft.commitIdx)
 }
-
