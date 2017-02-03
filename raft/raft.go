@@ -52,6 +52,8 @@ func New(id uint64, srvc rs.RaftService, store store.Store) *Raft {
 		lastSentIdx:     map[uint64]uint64{},
 		addEntries:      make(chan *addEntryFuture, 10),
 		commitIdxEvents: newIdxEvents(),
+		timeoutInterrupt: make(chan struct{}),
+		timeoutReached:   make(chan struct{}),
 	}
 	r.configure()
 	return r
@@ -61,7 +63,7 @@ type Raft struct {
 	ID              uint64
 	BootstrapExpect int
 
-	state State
+	State State
 
 	leaderID    uint64
 	currentTerm uint64
@@ -84,6 +86,9 @@ type Raft struct {
 	sendVoteReq       chan *rs.SendVoteRequest
 	voteReq           chan *rs.VoteRequestFuture
 	voteRes           chan *rpb.Response
+
+	timeoutInterrupt  chan struct{}
+	timeoutReached    chan struct{}
 
 	addEntries      chan *addEntryFuture
 	commitIdxEvents *idxEvents
@@ -227,17 +232,17 @@ func (r *Raft) runAsFollower() {
 	case req := <-r.addEntries:
 		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
-		log.Printf("[DEBU] raft: %s receive appendEntries from %d: %+v", r.state.Name(), msg.Msg.SenderID, msg.Msg)
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d: %+v", r.State.Name(), msg.Msg.SenderID, msg.Msg)
 		r.respondToAppendEntriesAsFollower(msg)
 	case msg := <-r.voteReq:
-		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.state.Name(), msg.Msg.CandidateID)
+		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.State.Name(), msg.Msg.CandidateID)
 		r.respondToVoteRequest(msg)
 	case msg := <-r.appendEntriesRes:
-		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.state.Name(), msg.SenderID)
+		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.State.Name(), msg.SenderID)
 	case msg := <-r.voteRes:
-		log.Printf("[DEBU] raft: %s receive vote response from %d", r.state.Name(), msg.SenderID)
-	case <-time.After(jitter(FollowerTimeout)):
-		log.Printf("[DEBU] raft: %s follower timeout, converting to candidate", r.state.Name())
+		log.Printf("[DEBU] raft: %s receive vote response from %d", r.State.Name(), msg.SenderID)
+	case <-r.timeoutReached:
+		log.Printf("[DEBU] raft: %s follower timeout, converting to candidate", r.State.Name())
 		r.toCandidate()
 	}
 }
@@ -375,23 +380,24 @@ func (r *Raft) runAsLeader() {
 	case req := <-r.addEntries:
 		r.applyLogEntry(req)
 		r.sendLogEntries()
+		r.timeoutInterrupt <- struct{}{}
 	case msg := <-r.appendEntriesReq:
-		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.State.Name(), msg.Msg.SenderID)
 		if msg.Msg.Term >= r.currentTerm {
 			log.Printf("[INFO] raft: leader received append entries from greater term %+v", msg.Msg)
-			r.state = Follower
+			r.State = Follower
 			r.currentTerm = msg.Msg.Term
 		}
 		r.respondToAppendEntriesAsFollower(msg)
 	case res := <-r.appendEntriesRes:
-		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.state.Name(), res.SenderID)
+		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.State.Name(), res.SenderID)
 		r.handleAppendEntriesRes(res)
 	case msg := <-r.voteReq:
-		log.Printf("[DEBU] raft: %s receive voteRequest from %d", r.state.Name(), msg.Msg.CandidateID)
+		log.Printf("[DEBU] raft: %s receive voteRequest from %d", r.State.Name(), msg.Msg.CandidateID)
 		r.respondToVoteRequest(msg)
 	case res := <-r.voteRes:
-		log.Printf("[DEBU] raft: %s receive vote response from %d", r.state.Name(), res.SenderID)
-	case <-time.After(jitter(LeaderTimeout)):
+		log.Printf("[DEBU] raft: %s receive vote response from %d", r.State.Name(), res.SenderID)
+	case <-r.timeoutReached:
 		r.sendHeartbeats()
 	}
 }
@@ -413,7 +419,7 @@ func (r *Raft) sendVoteRequests() {
 func (r *Raft) toCandidate() {
 	r.sendVoteRequests()
 	r.currentTerm += 1
-	r.state = Candidate
+	r.State = Candidate
 }
 
 func (r *Raft) handleVoteResponse(msg *rpb.Response) {
@@ -423,7 +429,7 @@ func (r *Raft) handleVoteResponse(msg *rpb.Response) {
 	if (r.voteCount + 1) > r.service.NodeCount()/2 {
 		log.Printf("[DEBU] raft: converting to leading, received %d votes", r.voteCount)
 		// majority agree
-		r.state = Leader
+		r.State = Leader
 		r.leaderID = r.ID
 		r.votedFor = 0
 		r.voteCount = 0
@@ -436,19 +442,19 @@ func (r *Raft) runAsCandidate() {
 	case req := <-r.addEntries:
 		req.response <- &addEntryResponse{0, ErrNotLeader}
 	case msg := <-r.appendEntriesReq:
-		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.state.Name(), msg.Msg.SenderID)
+		log.Printf("[DEBU] raft: %s receive appendEntries from %d", r.State.Name(), msg.Msg.SenderID)
 		r.currentTerm = msg.Msg.Term // todo: need to check term greater than here?
-		r.state = Follower
+		r.State = Follower
 		r.respondToAppendEntriesAsFollower(msg)
 	case res := <-r.appendEntriesRes:
-		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.state.Name(), res.SenderID)
+		log.Printf("[DEBU] raft: %s receive appendEntries response from %d", r.State.Name(), res.SenderID)
 	case msg := <-r.voteReq:
-		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.state.Name(), msg.Msg.CandidateID)
+		log.Printf("[DEBU] raft: %s receive voteRequest for %d", r.State.Name(), msg.Msg.CandidateID)
 		r.respondToVoteRequest(msg)
 	case msg := <-r.voteRes:
-		log.Printf("[DEBU] raft: %s receive vote response for %d", r.state.Name(), msg.SenderID)
+		log.Printf("[DEBU] raft: %s receive vote response for %d", r.State.Name(), msg.SenderID)
 		r.handleVoteResponse(msg)
-	case <-time.After(jitter(CandidateTimeout)):
+	case <-r.timeoutReached:
 		r.toCandidate()
 	}
 }
@@ -470,9 +476,15 @@ func (r *Raft) run() {
 	}
 
 	log.Printf("[INFO] raft: starting...")
+
+	go r.runTimer()
+	r.runMain()
+}
+
+func (r *Raft) runMain() {
 	for {
-		prevState := r.state
-		switch r.state {
+		prevState := r.State
+		switch r.State {
 		case Leader:
 			r.runAsLeader()
 		case Candidate:
@@ -481,8 +493,30 @@ func (r *Raft) run() {
 			r.runAsFollower()
 		}
 
-		if r.state != prevState {
-			log.Printf("[INFO] raft: changed to state %s", r.state.Name())
+		r.timeoutInterrupt <- struct{}{}
+		if r.State != prevState {
+			log.Printf("[INFO] raft: changed to State %s", r.State.Name())
+		}
+	}
+}
+
+func (r *Raft) runTimer() {
+	for {
+		var timeout time.Duration
+		switch r.State {
+		case Leader:
+			timeout = LeaderTimeout
+		case Candidate:
+			timeout = CandidateTimeout
+		case Follower:
+			timeout = FollowerTimeout
+		}
+
+		select {
+		case <-r.timeoutInterrupt:
+			break
+		case <-time.After(jitter(timeout)):
+			r.timeoutReached <- struct{}{}
 		}
 	}
 }

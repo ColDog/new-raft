@@ -192,6 +192,8 @@ func TestRaft_LeaderSendEntries(t *testing.T) {
 func TestRaft_RunAsFollowerElectionTimeout(t *testing.T) {
 	setupTestRaft()
 
+	testRaft.State = Follower
+	go testRaft.runTimer()
 	testRaft.runAsFollower()
 
 	c := service.SendVoteRequestChan()
@@ -206,6 +208,8 @@ func TestRaft_Election(t *testing.T) {
 	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3003"}
 	service.Nodes[3] = &rpb.Node{2, "127.0.0.1:3004"}
 
+	testRaft.State = Follower
+	go testRaft.runTimer()
 	testRaft.runAsFollower()
 
 	c := service.SendVoteRequestChan()
@@ -215,7 +219,7 @@ func TestRaft_Election(t *testing.T) {
 
 	testRaft.handleVoteResponse(&rpb.Response{SenderID: 2, Accepted: true})
 
-	assert.Equal(t, Leader, testRaft.state)
+	assert.Equal(t, Leader, testRaft.State)
 }
 
 func TestRaft_ApplyEntry(t *testing.T) {
@@ -236,6 +240,13 @@ func TestRaft_ApplyEntryFull(t *testing.T) {
 	setupTestRaft()
 	service.Nodes[2] = &rpb.Node{2, "127.0.0.1:3002"}
 	service.Nodes[3] = &rpb.Node{3, "127.0.0.1:3003"}
+
+	go func() {
+		for {
+			// have to listen to this or leader will be blocked
+			<-testRaft.timeoutInterrupt
+		}
+	}()
 
 	go func() {
 		for {

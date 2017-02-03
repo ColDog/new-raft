@@ -11,7 +11,7 @@ func raftInfo(r *Raft) map[string]interface{} {
 	info := map[string]interface{}{}
 	raftState := map[string]interface{}{}
 
-	raftState["state"] = r.state.Name()
+	raftState["state"] = r.State.Name()
 
 	raftState["nextIdx"] = r.nextIdx
 	raftState["matchIdx"] = r.matchIdx

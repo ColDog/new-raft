@@ -3,4 +3,4 @@
 
 name=${1}
 shift
-go test github.com/coldog/raft/${name} -v -race "$@"
+go test github.com/coldog/raft/${name} -v "$@"
