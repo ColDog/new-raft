@@ -147,6 +147,28 @@ func TestRaftCluster_BootstrapWithin5Seconds(t *testing.T) {
 	}
 }
 
+func TestRaftCluster_AddEntry(t *testing.T) {
+	testCluster(3)
+	time.Sleep(5 * time.Second)
+
+	var leader *Raft
+	for _, node := range cluster {
+		if node.raft.State == Leader {
+			leader = node.raft
+			break
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		leader.AddEntry([]byte("test"))
+	}
+
+	time.Sleep(2 * time.Second)
+	for _, node := range cluster {
+		assert.Equal(t, uint64(2), node.raft.commitIdx)
+	}
+}
+
 func TestRaftCluster_VerifyLogs(t *testing.T) {
 	testCluster(2)
 	time.Sleep(5 * time.Second)
